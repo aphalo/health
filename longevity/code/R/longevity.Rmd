@@ -1,6 +1,6 @@
 ---
 title: 'An Analysis Of: "Evidence for a limit to human lifespan"'
-author: "Neil Saunders"
+author: "Neil Saunders with a section by Pedro J. Aphalo"
 date: "14/12/2016"
 output: 
   html_document: 
@@ -18,6 +18,7 @@ library(lubridate)
 library(segmented)
 library(broom)
 library(dplyr)
+library(nlme)
 ```
 
 ## Introduction
@@ -32,7 +33,7 @@ You can easily get data from the [International Database on Longevity](http://ww
 # create an account at the International Database on Longevity
 # then login at http://www.supercentenarians.org/User/Login
 # and download all of their CSV files
-files <- list.files("~/Dropbox/projects/github_projects/health/longevity/data/", full.names = TRUE, pattern = "*.csv")
+files <- list.files("../../data", pattern = "*.csv", full.names = TRUE)
 l1 <- lapply(files, function(x) read.csv(x, sep = ";", header = TRUE, stringsAsFactors = FALSE))
 idl <- do.call(rbind, l1)
 
@@ -94,7 +95,6 @@ idl4 <- idl[idl$Country.of.death %in% c("FRA", "GBR", "JPN", "USA"),]
 idl4.max <- aggregate(Age.days. ~ yod, idl4, max)
 ```
 
-
 ## Modelling
 ### Linear regression
 The simplest linear regression.
@@ -125,3 +125,98 @@ ggplot(idl) +  theme_bw() + geom_point(aes(yod, Age.days. / 365)) + labs(x = "ye
 * However, in contrast to the paper, the breakpoint is early 1999 (not 1995), standard error ~ 2.2 years
 * Agree with previous analysis that the segmented model is not superior to a basic linear model
 
+# Including countries as random effect (P. J. A., 2016-12-18)
+
+Surprisingly the different analyses have overlooked the fact the time series for the different countries cover diferent ranges of years, while at the same time difering in their overall means. Not including countries in the analysis can be, from first principles, expected to cause bias and distort the apparent shape of the response.
+
+```{r}
+idl4.max.country <- aggregate(Age.days. ~ yod * Country.of.death, idl4, max)
+idl4.max.country$yod2k <-  idl4.max.country$yod - 2000
+idl4.max.country$Country.of.death <- factor(idl4.max.country$Country.of.death)
+```
+
+```{r}
+summary(idl4.max.country)
+```
+
+A simple plot with lines fitted by country suggests that there is continued increase in age at death.
+
+```{r}
+ggplot(idl4.max.country, aes(yod, Age.days. / 365, color = Country.of.death)) +  theme_bw() + geom_point() + labs(x = "year of death", y = "maximum age at death") + geom_smooth(method = lm)
+```
+
+Fitting a mixed effects model shows a clear aoutlier
+
+```{r}
+idl4a.lme <- lme(Age.days. ~ yod2k, random = ~1|Country.of.death, data = idl4.max.country)
+idl4b.lme <- lme(Age.days. ~ yod2k, random = ~1|Country.of.death, data = idl4.max.country, weights = varPower())
+anova(idl4a.lme, idl4b.lme)
+```
+
+```{r}
+plot(idl4a.lme)
+plot(idl4a.lme, resid(., type = "p") ~ yod)
+anova(idl4a.lme)
+summary(idl4a.lme)
+glance(idl4a.lme)
+
+```
+
+
+```{r}
+idle.aug <- augment(idl4a.lme, idl4.max.country)
+names(idle.aug)
+```
+
+Plotting the fitted values and original data by country, shows clearly the problem of the different lengths of series.
+
+```{r}
+ggplot(idle.aug, aes(yod, Age.days./365, color = Country.of.death)) +
+  geom_point() +
+  geom_line(aes(y = .fitted/365))
+```
+
+The residuals plotted vs. year of death do not suggest any drastic change in slope around 1990-2000.
+
+```{r}
+ggplot(idle.aug, aes(yod, .resid/365, color = Country.of.death)) +
+  geom_point() + geom_smooth(method = lm)
+```
+
+We fit a curvilinear model to test for evidence of curvature.
+
+```{r}
+idl4a2.lme <- lme(Age.days. ~ poly(yod2k, degree = 2), random = ~1|Country.of.death, data = idl4.max.country)
+idl4b2.lme <- lme(Age.days. ~ poly(yod2k, degree = 2), random = ~1|Country.of.death, data = idl4.max.country, weights = varPower())
+anova(idl4a2.lme, idl4b2.lme)
+```
+
+We see no evidence for curvature.
+
+```{r}
+anova(update(idl4a.lme, method = "ML"), update(idl4a2.lme, method = "ML"))
+
+```
+
+Anyway we plot as before, and the very slight and non-significant curvature in the second degree polynomial is upwards.
+
+```{r}
+plot(idl4a2.lme)
+plot(idl4a2.lme, resid(., type = "p") ~ yod)
+anova(idl4a2.lme)
+summary(idl4a2.lme)
+glance(idl4a2.lme)
+
+```
+
+```{r}
+idle2.aug <- augment(idl4a2.lme, idl4.max.country)
+names(idle2.aug)
+```
+```{r}
+ggplot(idle2.aug, aes(yod, Age.days./365, color = Country.of.death)) +
+  geom_point() +
+  geom_line(aes(y = .fitted/365))
+```
+
+There is one additional problem, that the size of the statistical population sampled has increased over the years, and consequently the expected value for the maximum age at death must have increased due to this alone.
